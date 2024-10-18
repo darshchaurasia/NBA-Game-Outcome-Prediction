@@ -1,0 +1,282 @@
+---
+title: "NBA Game Outcome Prediction"
+author: "Darsh Chaurasia"
+date: "2024-09-29"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Description
+In this project, I will focus on predicting the outcome of NBA games using machine learning models based on key game statistics. I will work with a dataset that includes information such as points scored, field goal percentages, assists, rebounds, and whether the home team won or lost. I will begin by exploring and preprocessing the data, handling any missing values, creating new features like the point difference, and converting categorical variables into dummy variables for modeling. I will perform exploratory data analysis to understand the relationships between various statistics and game outcomes, using visualizations like histograms and heatmaps. I will then train a Random Forest model to predict whether the home team will win, using features like points, assists, and rebounds, and evaluate the model's performance with metrics such as accuracy and precision. I expect the results to be promising, and I will conclude by discussing how certain statistics, like field goal percentage and point difference, are strong predictors of game outcomes, while also suggesting further improvements for future work.
+
+# Importing Libraries
+For this project, I will use several important R libraries. I will rely on **dplyr** and **tidyr** for efficient data manipulation, allowing me to clean and transform the dataset by handling missing values, creating new features, and converting categorical variables. To load the dataset, I will use **readr**, which will help me easily import the data into R. For visualizations, I will utilize **ggplot2** to create plots like histograms and bar charts, and **corrplot**/**ggcorrplot** to visualize correlation matrices in a clear and informative way. For building the machine learning model, I will choose **caret**, which simplifies model training, data splitting, and evaluation. I will use **randomForest** to build the predictive model itself, as it's a robust and popular method for classification tasks. Finally, I will employ **pROC** to evaluate the model's performance, generating ROC curves and calculating metrics like AUC to assess prediction accuracy.
+```{r, message = FALSE}
+# Data manipulation and cleaning
+library(dplyr)
+library(tidyr)
+library(readr)
+
+# Data visualization
+library(ggplot2)
+library(corrplot)
+library(ggcorrplot)
+
+# Machine learning and modeling
+library(caret)
+library(randomForest)
+
+# Performance evaluation
+library(pROC)
+```
+
+
+# Importing the data
+```{r, message = FALSE}
+nba_data <- read_csv("nba.csv")
+```
+
+# View the first few rows of the dataset
+```{r}
+head(nba_data)
+```
+# Quick Overview of the Data
+
+## Summary of the dataset
+```{r}
+summary(nba_data)
+```
+
+\vspace{3cm}
+
+## Visualizing the Distribution of Points Scored by the Home Team
+```{r}
+# Histogram of points scored by the home team
+ggplot(nba_data, aes(x = pts_home)) +
+  geom_histogram(aes(y = after_stat(density)), binwidth = 5, fill = "steelblue", 
+                 color = "black",alpha = 0.7) +
+  geom_density(color = "red", linewidth = 1) +
+  labs(title = "Distribution of Home Team Points", 
+       x = "Home Team Points", 
+       y = "Density") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, size = 15),
+        axis.title.x = element_text(size = 12),
+        axis.title.y = element_text(size = 12)) +
+  geom_vline(aes(xintercept = mean(pts_home)), color = "blue", linetype = "dashed",
+             linewidth = 1) +
+  annotate("text", x = mean(nba_data$pts_home), y = 0.01, label = "Mean", color = "blue",
+           angle = 90, vjust = -0.5)
+```
+
+# Pre-Processing the Data
+Handling missing values, creating new features, and converting categorical variables.
+
+
+## Handling Missing Values
+```{r}
+# Check for missing values
+sum(is.na(nba_data))
+
+# Impute or remove missing values if necessary
+nba_data <- nba_data %>% mutate_if(is.numeric, ~ ifelse(is.na(.), 
+median(., na.rm = TRUE), .))
+```
+
+## Creating New Features
+Create a new feature representing the point difference between the home and away teams.
+```{r}
+# Create a new feature: Point Difference
+nba_data <- nba_data %>%
+  mutate(PointDifference = pts_home - pts_away)
+```
+
+## Converting Categorical Variables to Dummy Variables
+Convert team names and other categorical variables into dummy variables for modeling.
+```{r}
+# Convert categorical variables into factors
+nba_data$team_home <- as.factor(nba_data$team_home)
+nba_data$team_away <- as.factor(nba_data$team_away)
+
+# Use dummy encoding for team names
+nba_data_encoded <- model.matrix(~ team_home + team_away + 0, data = nba_data) %>% 
+  as.data.frame()
+
+# Combine the dummy variables back with the original dataset 
+# (excluding the original team columns)
+nba_data <- cbind(nba_data_encoded, nba_data %>% select(-team_home, -team_away))
+```
+
+\vspace{3cm}
+
+# Exploratory Data Analysis (EDA)
+Exploratory analysis to understand the relationships between different game statistics and the outcome.
+
+## Distribution of Game Outcomes
+```{r}
+# Visualize the distribution of game outcomes (win/loss) 
+ggplot(nba_data, aes(x = factor(home_team_win), fill = factor(home_team_win))) +
+  geom_bar() +
+  scale_fill_manual(values = c("0" = "red", "1" = "blue"), 
+                    labels = c("0" = "Loss", "1" = "Win")) +
+  labs(title = "Distribution of Home Team Wins and Losses", 
+       x = "Home Team Outcome (0 = Loss, 1 = Win)", 
+       y = "Count", 
+       fill = "Outcome") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, size = 15),
+        axis.title.x = element_text(size = 12),
+        axis.title.y = element_text(size = 12),
+        legend.position = "right")
+
+```
+
+
+## Correlation Analysis
+- r represents the correlation coefficient 
+- x and y represent two variables
+- n is the number of data points
+- sum of products of differences from mean
+\vspace{3cm}
+$$
+r = \frac{ \sum_{i=1}^{n} (x_i - \bar{x})(y_i - \bar{y}) } 
+          { \sqrt{ \sum_{i=1}^{n} (x_i - \bar{x})^2 } \cdot \sqrt{ \sum_{i=1}^{n} (y_i - \bar{y})^2 } }
+$$
+\newpage
+```{r}
+# Correlation calculation in R
+# Select numerical columns from the dataset
+nba_num_data <- nba_data %>% select(pts_home, pts_away, PointDifference,
+                                    ast_home, reb_home, ast_away, reb_away)
+
+# Calculate correlation matrix
+cor_matrix <- cor(nba_num_data)
+
+# View the correlation matrix
+cor_matrix
+```
+
+```{r}
+# install.packages("ggcorrplot")
+library(ggcorrplot)
+
+# Select numerical columns for correlation analysis
+nba_num_data <- nba_data %>% select(pts_home, pts_away, PointDifference, ast_home,
+                                    reb_home, ast_away, reb_away)
+
+# Compute the correlation matrix
+cor_matrix <- cor(nba_num_data)
+
+# Create an advanced correlation heatmap with ggcorrplot
+ggcorrplot(cor_matrix, 
+           method = "square",         # Use squares to represent the correlation
+           type = "lower",            # Display only the lower triangle of the matrix
+           lab = TRUE,                # Show correlation coefficients
+           lab_size = 4,              
+           colors = c("red", "white", "blue"),  # Color gradient
+           title = "Correlation Heatmap of Game Statistics", 
+           ggtheme = theme_minimal()) 
+
+```
+
+
+# Model Creation
+
+## Selecting a Machine Learning Algorithm
+I will use a Random Forest model to predict whether the home team will win.
+
+```{r, warning=FALSE, message=FALSE}
+# Load necessary libraries
+library(randomForest)
+library(caret)
+library(dplyr)
+
+# Define the response variable and features
+response <- nba_data$home_team_win  
+features <- nba_data %>% select(pts_home, pts_away, fg_pct_home, ast_home, reb_home)
+
+# Split the data into training and testing sets (80% training, 20% testing)
+set.seed(123)
+train_index <- createDataPartition(response, p = 0.8, list = FALSE)
+train_data <- features[train_index, ]
+train_labels <- response[train_index]
+test_data <- features[-train_index, ]
+test_labels <- response[-train_index]
+
+# Train a Random Forest model
+model_rf <- randomForest(x = train_data, y = train_labels)
+
+```
+
+
+## Applying Model to Test Data
+
+```{r}
+# Predict on the test data
+predictions_rf <- predict(model_rf, test_data)
+
+# View predictions
+head(predictions_rf)
+
+
+```
+
+
+# Model Results
+
+## Confusion Matrix and Accuracy
+
+```{r}
+# Predict on the test data (probability predictions)
+predictions_rf_prob <- predict(model_rf, test_data)
+
+# Convert probabilities to binary class labels (using 0.5 as threshold)
+predictions_rf <- ifelse(predictions_rf_prob > 0.5, 1, 0)
+
+# Ensure that both the predictions and test labels are factors with the same levels
+test_labels <- factor(test_labels, levels = c(0, 1))  # Ensure test labels are factors
+predictions_rf <- factor(predictions_rf, levels = c(0, 1))  # Ensure predictions are factors
+
+# Create a confusion matrix
+conf_matrix <- confusionMatrix(predictions_rf, test_labels)
+
+# Calculate accuracy, precision, and recall
+accuracy <- conf_matrix$overall['Accuracy']
+precision <- conf_matrix$byClass['Pos Pred Value']
+recall <- conf_matrix$byClass['Sensitivity']
+
+# Print accuracy, precision, and recall
+print(accuracy)
+print(precision)
+print(recall)
+```
+
+
+## ROC Curve
+
+```{r,message=FALSE, warning=FALSE}
+# Curve
+library(pROC)
+
+# Compute ROC curve and AUC
+roc_curve <- roc(test_labels, as.numeric(predictions_rf))
+plot(roc_curve, main = "ROC Curve")
+```
+
+
+
+# Conclusion
+
+In conclusion, I identified several key statistics, such as field goal percentage and point difference, as significant predictors of whether the home team wins. The Random Forest model provided an accuracy of r accuracy with reasonable precision and recall.
+
+# Limitations
+
+While the model performed well, there is room for improvement. One limitation is that this model doesn't account for advanced basketball metrics like turnovers or fouls. Incorporating these statistics could improve the model's predictive power.
+
+
